@@ -1,0 +1,36 @@
+robot_id: "uav_01"
+robot_type: "uav"
+
+sensors:
+  - name: "main_rgb"
+    type: "rgb_photo"
+    driver: "MockFrameSensor"
+    params:
+      resolution: [6000, 4000]
+      fps: 1
+    reductstore_bucket: "rgb_photo"
+
+  - name: "rgb_video"
+    type: "rgb_video"
+    driver: "MockVideoSensor"
+    params:
+      resolution: [3840, 2160]
+      fps: 30
+      chunk_duration_sec: 2
+    reductstore_bucket: "rgb_video"
+
+  - name: "thermal"
+    type: "thermal"
+    driver: "MockFrameSensor"
+    params:
+      resolution: [640, 512]
+      fps: 5
+    reductstore_bucket: "thermal"
+
+  - name: "lidar"
+    type: "lidar"
+    driver: "MockFrameSensor"
+    params:
+      points_per_sec: 300000
+      chunk_duration_sec: 1
+    reductstore_bucket: "lidar"
