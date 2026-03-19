@@ -103,8 +103,8 @@ At the target fleet size of 5--20~robots, the overhead of broadcasting every que
 The system handles two distinct acquisition patterns, which must be supported by a unified data model:
 
 \begin{description}
-    \item[Discrete-frame sensors] (RGB photo, thermal, multispectral, LiDAR) produce standalone blobs (a JPEG, TIFF, or LAZ chunk), each with a single timestamp and GPS coordinate that identifies when and where the capture occurred.
-    \item[Video-stream sensors] (RGB video) produce fixed-duration chunks of an H.264/H.265 encoded bitstream, aligned to GOP (Group of Pictures) boundaries. Each chunk has a start time, end time, and a representative GPS position. No decoding or re-encoding is performed on the robot, as the hardware encoder output is segmented at keyframe boundaries and stored directly.
+    \item[Discrete-frame sensors] (RGB photo, thermal, multispectral, LiDAR) produce standalone blobs (a JPEG, TIFF, or LAZ chunk), each with a single timestamp and GNSS coordinate that identifies when and where the capture occurred.
+    \item[Video-stream sensors] (RGB video) produce fixed-duration chunks of an H.264/H.265 encoded bitstream, aligned to GOP (Group of Pictures) boundaries. Each chunk has a start time, end time, and a representative GNSS position. No decoding or re-encoding is performed on the robot, as the hardware encoder output is segmented at keyframe boundaries and stored directly.
 \end{description}
 
 

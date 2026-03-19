@@ -76,7 +76,7 @@ All drones register a Zenoh queryable on a **stable, fixed key expression**: `ro
 The system handles two fundamentally different data patterns:
 
 ### Discrete-frame sensors (photo, thermal, multispectral, LiDAR)
-Each capture is a standalone blob (a JPEG, TIFF, LAZ chunk, etc.) with its own timestamp and GPS coordinate. The sensor worker polls the C++ HAL, receives one complete frame, and pushes it to the storage queue as a single message.
+Each capture is a standalone blob (a JPEG, TIFF, LAZ chunk, etc.) with its own timestamp and GNSS coordinate. The sensor worker polls the C++ HAL, receives one complete frame, and pushes it to the storage queue as a single message.
 
 ### Video streams (RGB video, potentially thermal video)
 Video is a continuous H.264/H.265 encoded bitstream. It cannot be treated as individual frames without transcoding (which is too expensive on-drone at full rate). Instead, the system handles video as **fixed-duration chunks** (e.g., 2-second GOP-aligned segments).
@@ -302,9 +302,9 @@ Inside the continuous async loop:
 - `class IFrameSensor` with `virtual FrameData get_latest_frame() = 0;`
 - `class IVideoSensor` with `virtual VideoChunkData get_latest_chunk() = 0;`
 
-**`mock_frame_sensor.cpp`:** Implement `MockFrameSensor : IFrameSensor`. Constructor takes `sensor_type`, `sensor_name`, `data_size_bytes` (e.g., 2MB for RGB, 0.65MB for thermal), and `interval_ms`. `get_latest_frame()` sleeps for `interval_ms` (simulating hardware wait), generates a dummy byte vector of `data_size_bytes`, and returns FrameData with mock GPS coordinates (randomized slightly around a Prague center point 50.08°N, 14.42°E to simulate movement).
+**`mock_frame_sensor.cpp`:** Implement `MockFrameSensor : IFrameSensor`. Constructor takes `sensor_type`, `sensor_name`, `data_size_bytes` (e.g., 2MB for RGB, 0.65MB for thermal), and `interval_ms`. `get_latest_frame()` sleeps for `interval_ms` (simulating hardware wait), generates a dummy byte vector of `data_size_bytes`, and returns FrameData with mock GNSS coordinates (randomized slightly around a Prague center point 50.08°N, 14.42°E to simulate movement).
 
-**`mock_video_sensor.cpp`:** Implement `MockVideoSensor : IVideoSensor`. Constructor takes `sensor_type`, `sensor_name`, `chunk_size_bytes` (e.g., 15MB for a 2s 4K H.265 chunk), and `chunk_duration_sec`. `get_latest_chunk()` sleeps for `chunk_duration_sec * 1000` ms, generates a dummy byte vector, returns VideoChunkData with `time_start` and `time_end` spanning the chunk duration. Mock GPS as above.
+**`mock_video_sensor.cpp`:** Implement `MockVideoSensor : IVideoSensor`. Constructor takes `sensor_type`, `sensor_name`, `chunk_size_bytes` (e.g., 15MB for a 2s 4K H.265 chunk), and `chunk_duration_sec`. `get_latest_chunk()` sleeps for `chunk_duration_sec * 1000` ms, generates a dummy byte vector, returns VideoChunkData with `time_start` and `time_end` spanning the chunk duration. Mock GNSS as above.
 
 **`sensor_factory.cpp`:** Implement `create_frame_sensor(name, type, params) -> unique_ptr<IFrameSensor>` and `create_video_sensor(name, type, params) -> unique_ptr<IVideoSensor>`. Map driver names ('MockFrameSensor', 'MockVideoSensor') to constructors.
 
@@ -374,7 +374,7 @@ When a query arrives:
 1. Loads a test config with 2 sensors (one frame, one video).
 2. Starts all services.
 3. Waits 5 seconds for data to accumulate.
-4. Sends a Zenoh spatial query covering the mock GPS area and verifies that results come back with both metadata and binary data.
+4. Sends a Zenoh spatial query covering the mock GNSS area and verifies that results come back with both metadata and binary data.
 5. Verifies SpatiaLite has records with valid SRID 4326 geometries.
 6. Verifies ReductStore buckets contain blobs.
 7. Shuts down cleanly.

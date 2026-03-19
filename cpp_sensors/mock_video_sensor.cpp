@@ -7,7 +7,7 @@
 static constexpr double BASE_LAT = 50.08;
 static constexpr double BASE_LON = 14.42;
 static constexpr double BASE_ALT = 300.0;
-static constexpr double GPS_JITTER = 0.001;
+static constexpr double GNSS_JITTER = 0.001;
 
 MockVideoSensor::MockVideoSensor(std::string sensor_type, std::string sensor_name,
                                   uint32_t chunk_size_bytes, double chunk_duration_sec)
@@ -35,7 +35,7 @@ VideoChunkData MockVideoSensor::get_latest_chunk() {
     std::vector<uint8_t> data(chunk_size_bytes_, 0xCD);
 
     thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> jitter(-GPS_JITTER, GPS_JITTER);
+    std::uniform_real_distribution<double> jitter(-GNSS_JITTER, GNSS_JITTER);
 
     return VideoChunkData{
         .data = std::move(data),

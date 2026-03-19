@@ -8,7 +8,7 @@
 static constexpr double BASE_LAT = 50.08;
 static constexpr double BASE_LON = 14.42;
 static constexpr double BASE_ALT = 300.0;
-static constexpr double GPS_JITTER = 0.001; // ~100m
+static constexpr double GNSS_JITTER = 0.001; // ~100m
 
 MockFrameSensor::MockFrameSensor(std::string sensor_type, std::string sensor_name,
                                  uint32_t data_size_bytes, uint32_t interval_ms)
@@ -24,9 +24,9 @@ FrameData MockFrameSensor::get_latest_frame() {
     // Generate dummy payload
     std::vector<uint8_t> data(data_size_bytes_, 0xAB);
 
-    // Randomised GPS around Prague
+    // Randomised GNSS around Prague
     thread_local std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<double> jitter(-GPS_JITTER, GPS_JITTER);
+    std::uniform_real_distribution<double> jitter(-GNSS_JITTER, GNSS_JITTER);
 
     return FrameData{
         .data = std::move(data),
