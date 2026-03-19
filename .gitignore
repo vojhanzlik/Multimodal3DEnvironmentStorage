@@ -6,5 +6,8 @@ dist/
 wheels/
 *.egg-info
 
+# C++ built modules
+cpp_hal*.so
+
 # Virtual environments
 .venv

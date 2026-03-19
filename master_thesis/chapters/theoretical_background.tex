@@ -1,0 +1,50 @@
+% !TeX spellcheck = en_CA
+
+\chapter{Theoretical Background} \label{ch:theoretical-background}
+
+This chapter introduces the application domain of heterogeneous multi-robot systems operating in the field, equipped with diverse sensors and constrained by the realities of edge computing and intermittent connectivity. The theoretical foundations behind the architectural decisions made later in this thesis are presented, covering the nature of multi-robot fleets, the sensor modalities involved, the computational platforms available, and the distributed systems principles that govern the design space.
+
+\section{Heterogeneous Multi-Robot Systems} \label{sec:multi-robot-systems}
+
+The system under consideration is a heterogeneous multi-robot fleet comprising unmanned aerial vehicles (UAVs) and unmanned ground vehicles (UGVs) that operate together with other entities such as human operators, central command elements, and ground infrastructure. The robots may be either teleoperated or fully autonomous, and they carry onboard sensors and localization/navigation systems that allow them to carry out a range of mission-specific tasks. The heterogeneity of the fleet is a key characteristic of the system, as different robot types are equipped with different sensor suites and are deployed for different purposes within the same operational scenario.
+
+The nature of these tasks requires mutual communication, whether for command and control, transfer of sensor data such as imagery and 3D models, or coordination of activities. Communication and the mechanisms for data management and exchange are therefore considered critical subsystems, subject to domain-specific requirements that arise from the operational environment. These requirements include variable wireless connectivity, limited battery life, constrained computational resources, and the need for continued operation during network partitions. Given these constraints, the data management subsystem must account for the trade-offs between availability, consistency, and fault tolerance, which are formalized in the CAP theorem discussed later in this chapter.
+
+\section{Onboard Sensor Suite} \label{sec:sensor-suite}
+
+Each robot is equipped with a subset of the following sensor types, depending on its role and mission profile:
+
+\begin{description}
+    \item[RGB camera (photo)] captures discrete high-resolution frames (e.g., 6000$\times$4000 pixels). The typical output is compressed JPEG at 1--2~fps, producing approximately 2~MB per frame.
+    \item[RGB camera (video)] produces a continuous H.264 or H.265 encoded bitstream at up to 30~fps and 4K resolution. The onboard hardware encoder (NVIDIA NVENC on Jetson Orin, Intel Quick Sync on NUC) generates the compressed stream directly, meaning that no software transcoding is required on the robot side. At typical 4K H.265 bitrates, this yields approximately 7.5~MB/s.
+    \item[Thermal camera] captures radiometric frames at lower resolution (e.g., 640$\times$512 pixels). The frames are stored as 16-bit TIFF at 5--10~fps, producing approximately 0.65~MB per frame.
+    \item[Multispectral camera] captures multiple narrow-band images per exposure (e.g., 5 bands at 1280$\times$960 pixels), with the output being approximately 1.2~MB per capture.
+    \item[LiDAR] produces 3D point clouds at rates of 300\,000 points/s or higher. The data is typically stored in chunked LAZ format, producing approximately 3~MB per one-second chunk.
+\end{description}
+
+A UAV might carry RGB photo, thermal, and LiDAR sensors, while a UGV might carry only RGB photo and multispectral. The combined data rate across all sensors on a single robot can reach approximately 32~MB/s, all of which must be ingested and stored locally on the robot's onboard computer. This high-throughput requirement places significant demands on the storage subsystem, which must be capable of sustained writes without data loss even under continuous operation.
+
+\section{Edge Computing Platforms} \label{sec:edge-platforms}
+
+The onboard computers considered for this system are:
+
+\begin{itemize}
+    \item \textbf{NVIDIA Jetson Orin:} 8~GB RAM, 6-core ARM CPU, GPU with NVENC hardware encoder, TDP 15--60~W.
+    \item \textbf{Intel NUC:} 16--32~GB RAM, 4-core x86 CPU with Quick Sync hardware encoder, TDP 28--65~W.
+\end{itemize}
+
+These platforms provide enough computational power for running embedded databases and processing sensor data in real time. However, they must simultaneously run navigation, perception, control, and communication software, all of which compete for the same limited CPU and memory. The data management subsystem therefore cannot monopolize resources and must coexist within a tight resource budget, which is reflected in the non-functional requirements defined in Chapter~\ref{ch:requirements}.
+
+\section{The CAP Theorem and Partition Tolerance} \label{sec:cap-theorem}
+
+The CAP theorem~\cite{brewer2000cap} states that a distributed system cannot simultaneously guarantee consistency (C), availability (A), and partition tolerance (P). In a multi-robot system operating over wireless links, network partitions are not exceptional events but a routine operational condition that occurs whenever a robot moves out of range, enters a signal-degraded area, or experiences interference. When a robot loses connectivity, it must continue storing sensor data locally, as write availability cannot be sacrificed without risking data loss during critical mission phases. Strong consistency, which requires consensus among a majority of active nodes before a write can be confirmed, is therefore incompatible with the operational environment. The system must accept eventual consistency and prioritize availability and partition tolerance, making it an AP system in the terminology of the CAP theorem. This design decision has direct consequences for the choice of storage and communication technologies, as any component that relies on consensus protocols is unsuitable for the target environment.
+
+\section{Spatial Indexing with R-trees} \label{sec:r-trees}
+
+Geospatial queries, specifically finding all sensor records captured within a given geographic bounding box, require an efficient spatial index structure. The R-tree~\cite{guttman1984rtrees}, introduced by Guttman in 1984, is a balanced tree data structure that indexes multi-dimensional spatial objects by their minimum bounding rectangles. R-trees support efficient bounding-box intersection and containment queries with logarithmic average-case complexity, which makes them well suited for the type of spatial filtering required by the system.
+
+SpatiaLite~\cite{spatialite2024}, the spatial extension of SQLite, implements R-tree indexes natively and provides standard SQL functions for spatial predicates (\texttt{MbrWithin}, \texttt{MbrIntersects}) and geometry construction (\texttt{MakePoint}, \texttt{BuildMbr}). This combination allows geospatial queries to be expressed as standard SQL statements and executed efficiently against a local embedded database, without a separate server process or external spatial computation library.
+
+\section{Federated Queries and Scatter-Gather} \label{sec:federated-queries}
+
+In the absence of a central index that aggregates metadata from all robots, queries must be distributed to all data-holding nodes and the results aggregated at the querying client. This pattern is known as a \emph{federated query} or \emph{scatter-gather}: a query is broadcast (scattered) to all participating nodes, each node evaluates it independently against its local data and spatial index, and the individual results are collected (gathered) by the querying client. No central coordinator is needed, as each robot acts as an independent database node that holds its own data and maintains its own index. The scatter-gather approach fits the target environment well, because it does not depend on any single node being available and handles the dynamic membership changes that occur when robots join or leave the network.

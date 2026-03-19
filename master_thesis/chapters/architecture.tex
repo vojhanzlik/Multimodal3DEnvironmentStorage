@@ -1,0 +1,140 @@
+% !TeX spellcheck = en_CA
+
+\chapter{Architecture Design} \label{ch:architecture}
+
+This chapter presents the architecture of the proposed solution, identifies which existing technologies are used and which components must be developed as new software, and derives the detailed software requirements for the Robot Manager, the on-robot data management service that implements the system requirements defined in Chapter~\ref{ch:requirements}.
+
+
+\section{Hybrid Architecture} \label{sec:high-level-architecture}
+
+As established in Chapter~\ref{ch:existing-solutions}, no single database satisfies all of the system requirements simultaneously. The chosen approach therefore divides responsibilities into three separate layers: metadata with spatial indexing, binary blob storage, and inter-node communication. Each layer is handled by a specialized component that was selected for its strengths in that particular role, and the coordination between these components is performed by a custom software layer.
+
+Each robot runs three infrastructure components that are coordinated by a software layer called the \emph{Robot Manager}, a Python application running on the onboard computer that implements all system logic, including receiving sensor data, storing it in the appropriate backends, registering in the peer-to-peer network, and handling incoming queries. The Robot Manager is not part of any of the underlying databases or communication libraries; it is custom software developed as part of this thesis and represents the primary implementation contribution.
+
+The data flow proceeds as follows. Sensor streams (from RGB cameras, thermal cameras, multispectral cameras, and LiDAR scanners) are received by the Robot Manager, which performs two concurrent writes for each captured sample. First, the binary data (image, point cloud, or video chunk) is stored in ReductStore. Second, the metadata (GNSS coordinates, timestamp, sensor type, camera orientation, altitude, and a reference to the ReductStore record) is inserted into the local SpatiaLite database. This dual-write pattern guarantees that the binary data and its corresponding metadata are always stored together, with the Robot Manager maintaining referential integrity between the two otherwise independent storage backends.
+
+Simultaneously, the Robot Manager registers a Zenoh queryable, a callback function that listens for incoming queries from external clients. When a query arrives (e.g., from a ground station operator), the Robot Manager translates it into an SQL query against SpatiaLite, retrieves the matching records, fetches the corresponding binary data from ReductStore, and returns the combined result via Zenoh to the querying client.
+
+The Robot Manager's functionality can be decomposed into three logical roles:
+\begin{itemize}
+    \item \textbf{Ingest:} receiving sensor data from the hardware abstraction layer and enqueuing it for storage.
+    \item \textbf{Index:} inserting metadata into SpatiaLite with spatial indexing and writing binary blobs to ReductStore.
+    \item \textbf{Serve:} handling Zenoh queries by querying the local database, fetching the corresponding blobs, and assembling responses.
+\end{itemize}
+
+External queries enter the system via Zenoh. A \emph{client} is any network participant that issues queries, typically a ground station with a graphical interface, but potentially another robot or an external application. The client does not need its own database, as it is a simple Zenoh client that constructs a query and sends it into the network. Zenoh delivers the query to all available robots, each robot responds independently based on its own local data, and the client aggregates the results from all respondents.
+
+
+\section{Technology Selection} \label{sec:technology-selection}
+
+Based on the survey conducted in Chapter~\ref{ch:existing-solutions}, the following components were selected for the implementation of the hybrid architecture:
+
+\begin{description}
+    \item[SpatiaLite] was selected for metadata storage and spatial indexing. It runs as an in-process SQLite extension with R-tree indexes, WAL mode for concurrent read/write access, and minimal resource overhead. SpatiaLite was preferred over GeoPackage (due to weaker library support), DuckDB (due to poor write performance), and RocksDB (due to the absence of native spatial queries).
+    \item[ReductStore] was selected for binary blob storage. It is a time-series blob store implemented in C++ and Rust, optimized for edge devices, and provides FIFO quotas for automatic eviction of the oldest data when disk space is exhausted. ReductStore was preferred over MinIO (due to higher resource requirements) and SeaweedFS (due to its server-oriented design).
+    \item[Zenoh] was selected for inter-robot communication. It is a peer-to-peer middleware with UDP multicast discovery, queryable callbacks for federated queries, and automatic reconnection upon network recovery. Zenoh was preferred over DDS (due to higher overhead) and MQTT (due to the requirement for a central broker).
+    \item[nanobind] was selected for C++/Python bindings, used to interface the Python application with the C++ sensor drivers. The C++ side releases the Python GIL during blocking hardware operations, which allows the asyncio event loop to remain responsive while sensor data is being acquired.
+    \item[asyncio] was selected as the Python concurrency framework. A single event loop coordinates all components via asynchronous queues, which avoids GIL contention and the serialization overhead that would be introduced by inter-process communication.
+\end{description}
+
+The coordination between SpatiaLite and ReductStore deserves particular emphasis: there is no implicit link or automatic synchronization between the two storage backends. They are independent components that are entirely unaware of each other's existence. All coordination is performed by the Robot Manager, which writes the binary data first, obtains a record identifier, and then inserts the metadata (including the identifier as a foreign reference) into SpatiaLite. Consistency between the two stores is maintained by the sequential ordering of writes within a single Robot Manager operation.
+
+
+\section{Robot Manager Requirements} \label{sec:robot-manager-requirements}
+
+The system-level requirements from Chapter~\ref{ch:requirements} impose a set of concrete software requirements on the Robot Manager component. To verify that the design addresses every system requirement, Table~\ref{tab:rm-requirements-traceability} traces each system requirement to its realization in the Robot Manager design.
+
+\begin{table}[htbp]
+\centering
+\caption{Traceability from system requirements to Robot Manager design decisions.}
+\label{tab:rm-requirements-traceability}
+\begin{tabular}{l p{10cm}}
+\hline
+\textbf{Req.} & \textbf{Robot Manager Realization} \\
+\hline
+F-01 & Sensor registry with a hardware abstraction layer (HAL) supporting both discrete-frame and video-chunk acquisition modes. \\
+F-02 & SpatiaLite database with R-tree spatial index on WGS\,84 point geometries. \\
+F-03 & Zenoh peer mode with UDP multicast scouting; no broker process required. \\
+F-04 & Network worker registers a Zenoh queryable; incoming queries are parsed and translated to SpatiaLite SQL with R-tree filtering. \\
+F-05 & Network worker fetches matching binary blobs from ReductStore, assembles metadata and base64-encoded data into a JSON response. \\
+F-06 & ReductStore bucket initialization with a configurable FIFO quota per sensor type. \\
+NF-01 & Single asyncio event loop with consumer-side batching; C++ HAL releases the GIL during blocking operations; SQLite WAL mode for concurrent reads and writes. \\
+NF-02 & Fully local storage (SpatiaLite + ReductStore); no consensus or replication protocol. \\
+NF-03 & Zenoh automatic scouting and session rejoin on network recovery. \\
+NF-04 & Embedded databases only (no server processes); bounded queue depth; batched writes to limit memory accumulation. \\
+D-01 & Coordinate validation on ingest (longitude $\in [-180, 180]$, latitude $\in [-90, 90]$); SRID\,4326 enforced in SpatiaLite schema. \\
+D-02 & Broadcast scatter-gather query pattern: every robot answers independently based on its local index, so overlapping trajectories return all relevant results. \\
+D-03 & Sensor registry pattern driven by a per-robot YAML configuration file; no hardcoded sensor assumptions. \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\subsection{Concurrency Model} \label{subsec:concurrency-model}
+
+To avoid Python GIL bottlenecks and inter-process communication overhead when handling large binary payloads, the Robot Manager follows a strict set of concurrency rules:
+
+\begin{enumerate}
+    \item The entire Python system runs on a \textbf{single asyncio event loop}, which serves as the central coordination mechanism for all concurrent operations.
+    \item Inter-module communication is handled exclusively via \textbf{asyncio.Queue}, so that data is passed between components without shared mutable state or locking.
+    \item Sensor hardware is accessed via a C++ extension built with nanobind. The C++ code \textbf{releases the GIL} (\texttt{gil\_scoped\_release}) while waiting for hardware data, so that the Python event loop is not blocked during sensor acquisition.
+    \item Calls to the C++ sensor bindings and to the SQLite database are offloaded using \textbf{asyncio.to\_thread()} so that they do not block the event loop while performing potentially long-running synchronous operations.
+    \item The storage worker uses \textbf{consumer-side time-or-count batching} (flushing on 50~items or 0.5\,s, whichever comes first) to prevent disk thrashing from individual writes for each sensor sample.
+    \item Every Python component inherits from a common \textbf{BaseService} class with async \texttt{start()} and \texttt{stop()} methods, which provides a uniform lifecycle management interface for all services.
+\end{enumerate}
+
+
+\subsection{Query Routing: Broadcast Scatter-Gather} \label{subsec:query-routing}
+
+All robots register a Zenoh queryable on a fixed key expression \texttt{robot/*/query/spatial}. Every spatial query that is issued by any client is delivered to every online robot, and each robot filters locally against its own SpatiaLite index and responds only if it has matching data.
+
+This broadcast approach was preferred over spatial-key routing (where robots would register under keys corresponding to their current geographic cell) for three reasons:
+\begin{itemize}
+    \item \textbf{Historical queries work correctly.} A robot that flew over a location an hour ago still has the data stored in its local database and will respond to the query, whereas spatial-key routing would miss it once the robot has moved to a different cell and re-registered under a new key.
+    \item \textbf{No re-registration race conditions.} Spatial-key routing would require continuous key updates as robots move, creating time windows during which a query could miss a robot that is mid-transition between two cells.
+    \item \textbf{Simplicity.} No coordination logic or geographic cell computation is required on the robot side. Each robot simply answers based on what it has stored in its local database.
+\end{itemize}
+
+At the target fleet size of 5--20~robots, the overhead of broadcasting every query to all robots is negligible. Each local R-tree lookup completes in sub-millisecond time, so the computational cost on each robot is minimal even if the query does not match any local data.
+
+
+\subsection{Sensor Data Model} \label{subsec:sensor-data-model}
+
+The system handles two distinct acquisition patterns, which must be supported by a unified data model:
+
+\begin{description}
+    \item[Discrete-frame sensors] (RGB photo, thermal, multispectral, LiDAR) produce standalone blobs (a JPEG, TIFF, or LAZ chunk), each with a single timestamp and GPS coordinate that identifies when and where the capture occurred.
+    \item[Video-stream sensors] (RGB video) produce fixed-duration chunks of an H.264/H.265 encoded bitstream, aligned to GOP (Group of Pictures) boundaries. Each chunk has a start time, end time, and a representative GPS position. No decoding or re-encoding is performed on the robot, as the hardware encoder output is segmented at keyframe boundaries and stored directly.
+\end{description}
+
+
+\subsection{Sensor Registry Pattern} \label{subsec:sensor-registry}
+
+The robot's sensor suite is declared in a per-robot YAML configuration file that is loaded at startup. The sensor worker reads this configuration and instantiates one C++ HAL driver per entry via a factory function. This approach allows heterogeneous robots (such as a UAV with RGB, thermal, and LiDAR sensors versus a UGV with only RGB and multispectral) to run the same software without any code changes, which satisfies requirement D-03.
+
+
+\subsection{Query Format and Processing} \label{subsec:query-format}
+
+A query is structured as a Zenoh \texttt{get} operation on the key expression \texttt{robot/*/query/spatial}. The payload is a JSON object specifying the spatial extent (bounding box in geographic coordinates), the temporal extent, and an optional sensor type filter:
+
+\begin{verbatim}
+{"bbox": [14.40, 50.05, 14.45, 50.10],
+ "time_start": "2025-01-01T10:00:00Z",
+ "time_end": "2025-01-01T10:05:00Z",
+ "sensor": "RGB"}
+\end{verbatim}
+
+On each robot, the Robot Manager's queryable callback is invoked automatically when Zenoh delivers the query. The callback performs the following steps:
+\begin{enumerate}
+    \item The JSON payload is parsed and validated.
+    \item The query parameters are translated into an SQL query against the local SpatiaLite database, utilizing the R-tree spatial index for efficient filtering (e.g., \texttt{MbrWithin(geometry, BuildMbr(...))}).
+    \item For each matching record, the corresponding binary data is fetched from ReductStore using the stored reference identifier.
+    \item The metadata and binary data are assembled into a single JSON response, with the binary data encoded in base64, and sent back to the querying client via Zenoh.
+\end{enumerate}
+
+If the robot has no matching records, an empty response is returned (or no response at all, depending on the configuration). The client aggregates responses from all robots that reply within a configurable timeout and presents the results to the user.
+
+
+\section{Component Overview} \label{sec:component-overview}
+
+TODO: detailed description of each module (SensorWorker, StorageWorker, NetworkWorker, DBClient, EventBus) and their interactions.

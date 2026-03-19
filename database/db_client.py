@@ -72,7 +72,7 @@ class DBClient:
 
     def connect(self) -> None:
         """Open the database connection, load SpatiaLite, and initialise schema."""
-        self._conn = sqlite3.connect(self._db_path)
+        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.enable_load_extension(True)
         self._conn.load_extension("mod_spatialite")
         self._conn.enable_load_extension(False)

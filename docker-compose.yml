@@ -1,0 +1,12 @@
+services:
+  reductstore:
+    image: reduct/store:latest
+    ports:
+      - "8383:8383"
+    volumes:
+      - reductstore_data:/data
+    environment:
+      RS_DATA_PATH: /data
+
+volumes:
+  reductstore_data:

@@ -1,0 +1,87 @@
+% !TeX spellcheck = en_CA
+
+\chapter{Existing Solutions} \label{ch:existing-solutions}
+
+This chapter surveys existing database and storage technologies and evaluates their suitability for distributed geospatial data management on edge robotic platforms. The survey is structured according to the three responsibilities identified in the problem formalization: metadata storage with spatial indexing, binary blob storage, and inter-node communication. To identify the most suitable components for the proposed architecture, each category of solutions is examined against the constraints established in Chapter~\ref{ch:requirements}, especially the requirements for resource efficiency, partition tolerance, and local-first operation.
+
+
+\section{Server-Grade Geospatial Databases} \label{sec:server-grade-databases}
+
+The first category of candidates comprises established geospatial database systems that were designed for server and cloud environments, including PostGIS (PostgreSQL), GeoMesa, Elasticsearch with geo-point indexes, GeoWave, Oracle Spatial, Microsoft SQL Server Spatial, MySQL Spatial, and MongoDB with spatial indexes. While these systems offer mature spatial query capabilities, they are designed for environments where high availability, stable power, and powerful hardware can be assumed~\cite{garcia2024computational}.
+
+PostGIS, for instance, requires a minimum of 2~GB of RAM dedicated solely to the database process for production use, with 8--32~GB being the recommended configuration~\cite{postgis2024admin}. GeoMesa requires a running JVM, multiple nodes, and continuous network connectivity in order to coordinate write operations and maintain its distributed index. These resource requirements are incompatible with an onboard computer that must share its 8--32~GB of RAM between the database, sensor drivers, navigation, perception, and control software, all of which compete for the same limited memory budget.
+
+Specialized spatio-temporal extensions such as MobilityDB, which provides excellent trajectory analysis capabilities, are built on top of PostgreSQL and therefore inherit the same server-grade resource requirements. Similarly, Atlas4D, which combines PostGIS, TimescaleDB, pgvector, and H3 indexing into a unified system, carries the full overhead of the PostgreSQL ecosystem. Given these resource demands, server-grade geospatial databases were ruled out for the target deployment environment.
+
+
+\section{Distributed NoSQL Databases} \label{sec:nosql-databases}
+
+Distributed NoSQL databases, including Cassandra, DynamoDB, Riak, and similar systems, were considered as potential solutions for the inter-node distribution aspect of the problem. These systems are designed for long-running nodes with stable cluster membership and persistent network connections that enable continuous data replication~\cite{ding2024distributed}. Cassandra, for example, relies on a gossip protocol between nodes and runs continuous compaction processes, demanding a minimum of 8~GB of RAM per node (with 32~GB being the recommended configuration).
+
+More fundamentally, these systems rely on consensus protocols (such as Raft) that require acknowledgment from a majority of active nodes to confirm a write operation. In an environment with intermittent connectivity, writes would fail whenever a robot loses its network connection, which is unacceptable for a system that must sustain high-frequency writes at all times regardless of network state. This limitation is well documented in the context of Mobile Ad-hoc Networks (MANETs), where consensus protocols are known to fail due to unstable topology and interrupted connectivity~\cite{sichitiu2005mesh}.
+
+Neo4j Spatial, while offering an interesting graph-based spatial model, is similarly a full server-grade system that is unsuitable for embedded deployment on resource-constrained edge hardware.
+
+
+\section{Analytical and Array Databases} \label{sec:analytical-databases}
+
+Systems designed for multidimensional array data, including TileDB, Rasdaman, and SciDB, were evaluated for handling raster sensor data. TileDB Embedded can technically run on a robot as a local storage engine, but it provides no distribution mechanism, no peer-to-peer replication capability, and no spatial index synchronization between nodes, meaning that each instance is entirely isolated and cannot participate in distributed queries.
+
+DuckDB was also considered due to its fast analytical query performance, but it is optimized for read-heavy workloads, which makes it a poor fit for the write-intensive ingest pattern of continuous sensor streams that characterizes the target system.
+
+
+\section{Peer-to-Peer Storage Systems} \label{sec:p2p-storage}
+
+OrbitDB, which is built on top of IPFS, offers peer-to-peer replication and content-addressed storage. However, it provides no spatial indexing capability whatsoever. Adding spatial query capabilities would require implementing the entire spatial logic layer from scratch, which would negate the benefit of using an existing system and would amount to building a custom spatial database.
+
+Similarly, rqlite provides distributed replication of SQLite databases via the Raft consensus protocol. While it uses SQLite as its underlying storage engine, it reintroduces the consensus requirement that makes it unsuitable for partition-tolerant operation, the same limitation identified in the NoSQL databases discussed above. For a write to be confirmed, a majority of nodes must be reachable, which cannot be guaranteed in the target environment.
+
+
+\section{Embedded Databases for Metadata and Spatial Indexing} \label{sec:embedded-metadata}
+
+For the metadata and spatial indexing layer, the key candidates are embedded databases that can run without a separate server process and with minimal resource overhead.
+
+\textbf{SQLite} is one of the most widely deployed embedded databases, and its spatial extension, \textbf{SpatiaLite}~\cite{spatialite2024}, adds full geospatial functionality including R-tree spatial indexes~\cite{guttman1984rtrees}, geometry operations, coordinate reference system support, and standard SQL queries over spatial data. SpatiaLite runs as an in-process library, which means that no separate database server needs to be started or maintained.
+
+SpatiaLite was preferred over several alternative embedded solutions that were evaluated during the technology selection process:
+\begin{itemize}
+    \item \textbf{GeoPackage}, which is also built on SQLite, has a shorter history and weaker library support in the programming languages typically used in robotics (Python and C++), making integration more difficult.
+    \item \textbf{DuckDB} offers poor write performance compared to SQLite, as it is primarily an analytical (OLAP) database that was optimized for read-heavy workloads rather than the sustained write throughput required by the target system.
+    \item \textbf{RocksDB} provides no native spatial query capability, which means that all spatial logic would have to be implemented manually on top of the key-value store.
+    \item \textbf{rqlite} adds distributed Raft consensus on top of SQLite, which introduces network dependencies that are unacceptable for local-first operation.
+\end{itemize}
+
+An important feature of SpatiaLite is its WAL (Write-Ahead Logging) mode, which allows concurrent reads and writes from separate threads without locking. This is critical for the target system, which must serve spatial queries while simultaneously ingesting sensor data at high throughput without either operation blocking the other.
+
+
+\section{Blob Storage for Sensor Data} \label{sec:blob-storage}
+
+The binary sensor data (images, video chunks, and point clouds) requires a separate storage system distinct from the metadata database. Storing multi-megabyte blobs directly in SQLite would significantly degrade the database's performance and inflate the database file to an unmanageable size, making a separate blob storage component necessary.
+
+\textbf{ReductStore}~\cite{reductstore2024benchmark} is a time-series blob storage engine that was optimized specifically for edge devices and AI/robotics workloads. It is implemented in C++ and Rust with minimal resource requirements, and data is organized into \emph{buckets} (logical containers that group records of the same type), with each record identified by a timestamp and optional metadata labels. Records are written in append-only mode, which aligns well with the sequential nature of sensor data streams.
+
+A key feature for the robotic use case is ReductStore's support for \textbf{FIFO quotas}: when the configured disk space limit is reached, the oldest records are automatically evicted to make room for new data. Without this, a robot in flight would risk filling its storage completely and losing the ability to record new sensor data. Benchmarks published by the ReductStore developers show that ReductStore outperforms MinIO in both read and write throughput, MongoDB by 65--244\%, and TimescaleDB by 200--1604\% for blobs larger than 100~KB~\cite{reductstore2024benchmark}.
+
+ReductStore was preferred over MinIO and SeaweedFS, which were also evaluated. MinIO is an S3-compatible object store that requires more memory and CPU resources and is not optimized for the append-only write pattern typical of sensor data streams. SeaweedFS is a lighter alternative, but it was still designed primarily for server environments and lacks the FIFO quota mechanism that is critical for the robotic use case.
+
+
+\section{Communication Middleware} \label{sec:communication-middleware}
+
+For inter-robot communication and distributed query delivery, the system requires a middleware that supports peer-to-peer operation without a central broker, handles network partitions gracefully, and provides both publish/subscribe and request/reply semantics to support the federated query pattern.
+
+\textbf{Zenoh}~\cite{corsaro2023zenoh} is a communication middleware that was designed specifically for robotics, IoT, and edge computing environments. It was built to address the limitations of DDS (Data Distribution Service) and MQTT in environments with unstable connectivity. Comparative studies of ROS\,2 middlewares~\cite{zhang2024comparison} conducted on real robotic platforms have shown that Zenoh achieves the best performance over Wi-Fi and 4G networks. Its suitability for peer-to-peer topologies with wireless connectivity has been confirmed in experiments demonstrating low latency and high reliability~\cite{liang2023performance}. A performance study of middlewares for multi-robot mesh networks in planetary exploration~\cite{performance2025planetary} also identified Zenoh as the most suitable solution due to its low overhead and reliability in dynamic topologies.
+
+Zenoh provides two mechanisms that are critical to the proposed architecture:
+\begin{itemize}
+    \item \textbf{Publish/subscribe} for distributing events such as notifications about newly captured sensor data or telemetry updates across the fleet.
+    \item \textbf{Queryables,} the ability to register a callback on each robot that responds to incoming queries. This is what makes the federated scatter-gather query pattern possible without a central index or coordinator.
+\end{itemize}
+
+Zenoh uses UDP multicast scout messages for peer discovery (with the default multicast group 224.0.0.224 on port 7446). In pure peer-to-peer mode (without a router), nodes discover each other directly via multicast and exchange their tables of known peers, so that a newly connected robot automatically learns about all other participants in the network. When a robot loses connectivity, it simply becomes unreachable for queries, and queries directed at it time out while the rest of the fleet continues operating normally. The disconnected robot continues storing data locally, and upon reconnection, it re-announces itself via the scouting mechanism and resumes answering queries without any manual intervention. No data is lost during the disconnection period, because each robot stores its data locally regardless of network state~\cite{zhang2024comparison}.
+
+
+\section{Summary: No Single Solution} \label{sec:existing-solutions-summary}
+
+The analysis in this chapter shows that no single existing technology satisfies all requirements simultaneously: local execution on a resource-constrained robot, distribution across mobile nodes, spatial indexing, efficient binary blob storage, and high write throughput. The problem is difficult because it combines conflicting demands: global spatial indexes require connectivity, strong consistency requires consensus, and consensus does not work in an environment with intermittent connections.
+
+The conclusion is therefore not to seek a single universal database, but rather to design a hybrid architecture from smaller specialized components, each addressing one well-defined aspect of the problem. The architecture that results from this approach is presented in Chapter~\ref{ch:architecture}.

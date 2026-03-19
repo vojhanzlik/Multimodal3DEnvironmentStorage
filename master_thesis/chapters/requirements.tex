@@ -1,0 +1,79 @@
+% !TeX spellcheck = en_CA
+
+\chapter{Problem Formalization and System Requirements} \label{ch:requirements}
+
+This chapter formalizes the problem of distributed geospatial data management for heterogeneous robotic fleets operating on edge hardware. The requirements presented here define what the complete solution must achieve, independent of any particular software architecture or technology choice. By establishing these requirements before discussing implementation, the design decisions in later chapters can be traced back to concrete, well-defined needs.
+
+\section{Problem Statement} \label{sec:problem-statement}
+
+A fleet of autonomous robots, comprising unmanned aerial vehicles (UAVs) and unmanned ground vehicles (UGVs), operates in the field, with each robot equipped with a subset of high-throughput sensors including RGB cameras, thermal imagers, multispectral sensors, LiDAR scanners, and video encoders. Each robot produces up to 32~MB/s of raw sensor data that must be stored locally on resource-constrained edge hardware (Intel NUC or NVIDIA Orin), as relying on a central server for storage would introduce unacceptable network dependencies. Any operator or peer robot must be able to query the fleet for geospatially and temporally relevant data without relying on a central server or persistent network connectivity, which means that the data management capability must be fully distributed across the fleet.
+
+The system must therefore solve three coupled problems simultaneously:
+\begin{enumerate}
+    \item \textbf{High-throughput local ingest} of heterogeneous sensor streams without data loss, even under sustained operation where all sensors are producing data concurrently.
+    \item \textbf{Structured spatial indexing} of all captured data so that it can be queried efficiently by geographic region and time interval, enabling operators to retrieve data relevant to a specific area of interest.
+    \item \textbf{Peer-to-peer distributed querying} across the fleet with no broker, tolerating network partitions and varying fleet composition as robots join, leave, or temporarily lose connectivity.
+\end{enumerate}
+
+
+\section{Functional Requirements} \label{sec:functional-requirements}
+
+\begin{table}[H]
+\centering
+\caption{Functional requirements for the distributed geospatial data system.}
+\label{tab:functional-requirements}
+\begin{tabular}{l p{10cm}}
+\hline
+\textbf{ID} & \textbf{Description} \\
+\hline
+F-01 & The system shall ingest data from all supported sensor types, including discrete-frame sensors (RGB photo, thermal, multispectral, LiDAR) and continuous video streams (H.264/H.265 encoded). \\
+F-02 & The system shall store structured metadata for every captured sample, including timestamp, geographic coordinates, altitude, and sensor type, and shall maintain a spatial index enabling efficient bounding-box queries. \\
+F-03 & Robots shall discover each other and communicate using a peer-to-peer protocol with no centralized broker. Discovery shall use UDP multicast scouting on the local network. \\
+F-04 & The system shall accept spatial queries specifying a geographic bounding box, a time interval, and an optional sensor type filter, and shall parse and execute these queries against locally stored data. \\
+F-05 & When a spatial query matches local data, the system shall retrieve both the metadata and the corresponding binary blob, and return an aggregated response to the querying client. \\
+F-06 & The system shall enforce a configurable FIFO storage quota per sensor type. When the quota is exceeded, the oldest data shall be evicted automatically. \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\section{Non-Functional Requirements} \label{sec:non-functional-requirements}
+
+\begin{table}[H]
+\centering
+\caption{Non-functional requirements and constraints.}
+\label{tab:non-functional-requirements}
+\begin{tabular}{l p{10cm}}
+\hline
+\textbf{ID} & \textbf{Description} \\
+\hline
+NF-01 & The storage pipeline shall sustain a minimum write throughput of 40~MB/s. Query handling shall not block or degrade the ingest pipeline. \\
+NF-02 & The system shall tolerate network partitions. Each robot operates with a fully local storage backend and does not depend on consensus or replication to function. \\
+NF-03 & Upon network reconnection, robots shall automatically rediscover peers and resume responding to queries without manual intervention. \\
+NF-04 & Total memory consumption of the data management software shall remain below 2~GB, as it shares the edge platform with navigation, perception, and control software. \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\section{Domain Requirements} \label{sec:domain-requirements}
+
+\begin{table}[H]
+\centering
+\caption{Domain requirements.}
+\label{tab:domain-requirements}
+\begin{tabular}{l p{10cm}}
+\hline
+\textbf{ID} & \textbf{Description} \\
+\hline
+D-01 & All geographic coordinates shall use the WGS\,84 coordinate reference system (EPSG:4326). Coordinates shall be validated on ingest: longitude within $[-180, 180]$ and latitude within $[-90, 90]$. \\
+D-02 & The system shall correctly handle trajectory overlap: multiple robots may have captured data over the same geographic area at different times, and all relevant results shall be returned. \\
+D-03 & The system shall support heterogeneous robot configurations. Different robots carry different sensor suites, and the software shall adapt to the declared configuration without code changes. \\
+\hline
+\end{tabular}
+\end{table}
+
+
+\section{Requirements Summary} \label{sec:requirements-summary}
+
+The requirements defined above establish the external behavior of the system as a whole. They constrain the solution space but do not prescribe a particular architecture or technology stack. The functional requirements specify what the system must do, the non-functional requirements define the performance and resilience boundaries within which it must operate, and the domain requirements govern interoperability and correctness of geospatial information. Chapter~\ref{ch:existing-solutions} surveys existing technologies that address parts of this problem, and Chapter~\ref{ch:architecture} derives a concrete architecture together with the software-level requirements for the Robot Manager component that implements it.

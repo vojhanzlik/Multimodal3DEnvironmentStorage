@@ -28,24 +28,30 @@ class NetworkWorker(BaseService):
         db_client: DBClient,
         config: RobotConfig,
         reduct_client: ReductClient,
+        listen_endpoints: list[str] | None = None,
     ) -> None:
         super().__init__()
         self._db = db_client
         self._config = config
         self._reduct = reduct_client
+        self._listen_endpoints = listen_endpoints
         self._session: zenoh.Session | None = None
         self._queryable: zenoh.Queryable | None = None
-        self._task: asyncio.Task[None] | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
         """Open a Zenoh peer session and register the spatial queryable."""
+        self._loop = asyncio.get_running_loop()
         cfg = zenoh.Config()
         cfg.insert_json5("mode", '"peer"')
+        if self._listen_endpoints:
+            cfg.insert_json5("listen/endpoints", json.dumps(self._listen_endpoints))
 
         self._session = zenoh.open(cfg)
-        self._queryable = self._session.declare_queryable(QUERY_KEY_EXPR)
+        self._queryable = self._session.declare_queryable(
+            QUERY_KEY_EXPR, self._on_query
+        )
         self.is_running = True
-        self._task = asyncio.create_task(self._query_loop())
         logger.info(
             "NetworkWorker started — queryable on '%s' (robot_id=%s)",
             QUERY_KEY_EXPR,
@@ -55,33 +61,21 @@ class NetworkWorker(BaseService):
     async def stop(self) -> None:
         """Shut down the queryable, close the Zenoh session."""
         self.is_running = False
-        if self._task is not None:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
         if self._queryable is not None:
             self._session.undeclare(self._queryable)
             self._queryable = None
         if self._session is not None:
             self._session.close()
             self._session = None
+        self._loop = None
         logger.info("NetworkWorker stopped")
 
-    async def _query_loop(self) -> None:
-        """Poll the queryable for incoming queries and handle them."""
-        while self.is_running:
-            try:
-                query = await asyncio.to_thread(self._queryable.recv)
-                if query is None:
-                    continue
-                await self._handle_query(query)
-            except asyncio.CancelledError:
-                break
-            except Exception:
-                logger.exception("Error handling spatial query")
+    def _on_query(self, query: zenoh.Query) -> None:
+        """Zenoh callback — schedule async handling on the event loop."""
+        if self._loop is not None and self.is_running:
+            self._loop.call_soon_threadsafe(
+                asyncio.ensure_future, self._handle_query(query)
+            )
 
     async def _handle_query(self, query: zenoh.Query) -> None:
         """Parse a spatial query, run it against SpatiaLite, and reply."""

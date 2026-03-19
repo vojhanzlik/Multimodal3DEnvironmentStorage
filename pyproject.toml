@@ -11,6 +11,9 @@ dependencies = [
     "reduct-py>=1.18.1",
 ]
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
